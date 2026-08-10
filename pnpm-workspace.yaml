@@ -1,0 +1,27 @@
+# session-persistence-rdb monorepo：vendored deepseek-harness 在
+# vendor/deepseek-harness/（gitignore，git clone 或复制，同 desktop 模式）。
+#
+# packages 列表 = session-persistence-rdb + 依赖闭包（BFS 收集 deepseek-harness
+# 各成员的 dependencies + peerDependencies + devDependencies 中的 workspace
+# 引用；devDeps 也须列，nub 解析 workspace 成员时会处理 dev workspace 引用）。
+# 依赖以正常版本号匹配 workspace 成员（编译好的 lib/ 产物），无需发布/registry。
+
+packages:
+  - .
+  - vendor/deepseek-harness/vendor/cordis
+  - vendor/deepseek-harness/vendor/cosmokit
+  - vendor/deepseek-harness/vendor/include
+  - vendor/deepseek-harness/vendor/loader
+  - vendor/deepseek-harness/vendor/schemastery
+  - vendor/deepseek-harness/packages/core/scope
+  - vendor/deepseek-harness/packages/core/session
+  - vendor/deepseek-harness/packages/llm/llm
+  - vendor/deepseek-harness/packages/session/session-persistence
+  - vendor/deepseek-harness/packages/settings/settings
+  - vendor/deepseek-harness/packages/support/invariants
+  - vendor/deepseek-harness/packages/typert/type-meta
+  - vendor/deepseek-harness/packages/typert/registry
+  - vendor/deepseek-harness/packages/util/brand
+  - vendor/deepseek-harness/packages/util/timeout
+
+linkWorkspacePackages: true
