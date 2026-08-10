@@ -10,7 +10,7 @@ RDB（SQLite / PostgreSQL）持久会话后端（`ctx.sessionPersistence`）：�
 从 git 安装到 dsh profile（示例：web）：
 
 ```sh
-dsh plugin --profile=web add -W "@morlay/session-persistence-rdb@https://github.com/dsh-external/session-persistence-rdb.git"
+dsh plugin --profile=web add "@morlay/session-persistence-rdb@https://github.com/dsh-external/session-persistence-rdb.git"
 ```
 
 ## 配置
