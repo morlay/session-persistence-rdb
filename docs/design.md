@@ -7,20 +7,14 @@
 
 ```
 session-persistence-rdb/
-├── pnpm-workspace.yaml          # monorepo：本包 + vendored deepseek-harness 依赖闭包
-├── vendor/deepseek-harness/     # vendored deepseek-harness（gitignore；git clone 或复制，
-│                                #   同 desktop 模式，见 just sync / vendor/justfile）
 ├── cordis.patch.yml             # bundle 声明：dsh plugin 装配本插件
-├── src/                         # 只 import 官方包（cordis / @deepseek-ai/dsh-*）
-└── tests/                       # 含 vendored 官方契约测试
+├── src/                         # 只 import 官方包（@deepseek-ai/cordis 等 @deepseek-ai/*）
+└── tests/                       # 含上游官方契约测试
 ```
 
-依赖解析：`pnpm-workspace.yaml` 以**正常版本号 + workspace 匹配**
-（`linkWorkspacePackages: true`）把依赖解析到 vendored deepseek-harness 编译好的
-`lib/` 产物——无需发布、无需 registry、无需 `link:` 路径。packages 列表是依赖闭包
-（14 个包），由 deepseek-harness 各包 package.json 的 dependencies +
-peerDependencies + devDependencies 中的 workspace 引用 BFS 收集而来；闭包变动时按
-同一规则重跑收集。
+依赖解析：`@deepseek-ai/*`（含 `@deepseek-ai/cordis`、`@deepseek-ai/schemastery` 与
+`dsh-*` 系列）均从 npm registry 安装（版本见 package.json），无本地 vendor、
+无 workspace 成员。
 
 ## 与上游实现的差异
 

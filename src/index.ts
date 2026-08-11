@@ -21,8 +21,8 @@
  * @module @morlay/session-persistence-rdb
  */
 
-import { Context } from "cordis";
-import z from "schemastery";
+import { Context } from "@deepseek-ai/cordis";
+import z from "@deepseek-ai/schemastery";
 import { settingsNamespace, type Settings } from "@deepseek-ai/dsh-settings";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";

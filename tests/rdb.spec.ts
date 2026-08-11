@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { CallId, createMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { EmptySettings } from "./helpers.ts";
-import { Context } from "cordis";
+import { Context } from "@deepseek-ai/cordis";
 import { existsSync } from "node:fs";
 import { chmod, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

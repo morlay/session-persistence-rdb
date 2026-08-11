@@ -64,15 +64,10 @@ type Config =
 ## 开发
 
 ```sh
-# 同步 vendored deepseek-harness（git clone 到 vendor/deepseek-harness/，
-# 同 desktop 模式；DEEPSEEK_HARNESS_REPO / DEEPSEEK_HARNESS_REPO_BRANCH 环境变量）
-just sync
-# 构建 vendored 的 host 面 lib 产物（依赖闭包内的包需 lib/ + lib/types）
-just build-dsh
-# 安装依赖（workspace 匹配正常版本 → 链接 vendored 编译产物）
+# 安装依赖（@deepseek-ai/* 从 npm registry 安装）
 just dep
 # lint（oxlint + tsgolint 类型规则，即类型检查）
 just lint
-# 测试（vitest，含 vendored 契约测试）
+# 测试（vitest，含上游契约测试）
 just test
 ```
