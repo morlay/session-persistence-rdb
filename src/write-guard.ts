@@ -16,13 +16,13 @@
  * has its own head), so two instances writing different sessions remain a
  * supported multi-process deployment.
  *
- * The guard also tracks the upstream seqs of delta events (`assistant/chunk`)
- * this instance has dropped per session. A later `assistant/message` may carry
- * `sourceEventSeqs` referencing those chunks' upstream seqs; the references
- * can never be remapped on read (the referenced events have no persisted row),
- * so the write path prunes them. The concurrent-writer guarantee above limits
- * each session to one writer, making this instance the only authority for its
- * dropped seqs.
+ * The guard also tracks the upstream seqs of events this instance has dropped
+ * per session — delta events (`assistant/chunk`) and events the writer marked
+ * `ignorable`. A later `assistant/message` may carry `sourceEventSeqs`
+ * referencing those events' upstream seqs; the references can never be remapped
+ * on read (the referenced events have no persisted row), so the write path
+ * prunes them. The concurrent-writer guarantee above limits each session to
+ * one writer, making this instance the only authority for its dropped seqs.
  *
  * Pure in-memory state machine — no I/O — so the coordinator's timing contract
  * (never-read vs. confirmed absence vs. confirmed head; confirm after append /
@@ -94,9 +94,9 @@ export class WriteGuard {
   }
 
   /**
-   * Record the upstream seqs of delta events dropped for a session, so a later
-   * batch's `assistant/message` can prune `sourceEventSeqs` references to
-   * events that never got a persisted row.
+   * Record the upstream seqs of events dropped for a session (delta events and
+   * ignorable events), so a later batch's `assistant/message` can prune
+   * `sourceEventSeqs` references to events that never got a persisted row.
    * @param id - the session id.
    * @param seqs - the dropped events' upstream seqs (pure-delta batches included).
    */

@@ -8,3 +8,5 @@ nub.lock
 pnpm-lock.yaml
 package-lock.json
 npm-shrinkwrap.json
+
+.dsh-store/

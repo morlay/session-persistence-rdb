@@ -115,6 +115,18 @@ export function isEphemeralType(type: string): boolean {
 }
 
 /**
+ * Whether an event must be persisted. An event is dropped at write time when
+ * its type is ephemeral (content not persisted) OR the writer marked it
+ * `ignorable` — the envelope contract promises loss of an ignorable event
+ * cannot affect reconstruction, so it never enters the canonical log (the
+ * upstream seq is still recorded for provenance pruning, exactly like a
+ * dropped delta).
+ */
+export function isPersistedEvent(event: SessionEvent): boolean {
+  return !isEphemeralType(event.type) && event.ignorable !== true;
+}
+
+/**
  * Map a persisted event onto the playpen event dimensions. `f_kind` is the
  * upstream type; `f_role`/`f_name`/`f_action_id` are the playpen classification
  * columns. Unknown (plugin-merged) event types keep the playpen defaults so a

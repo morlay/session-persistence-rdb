@@ -9,28 +9,33 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { SessionStore, SessionId } from "@deepseek-ai/dsh-session";
-import type { Session, SessionEvent, SurfaceEvent, SurfaceEventType } from "@deepseek-ai/dsh-session";
+import type {
+  Session,
+  SessionEvent,
+  SurfaceEvent,
+  SurfaceEventType,
+} from "@deepseek-ai/dsh-session";
 import SessionPersistenceSqlite, { SCHEMA_VERSION, EPHEMERAL_EVENT_TYPES } from "../src/index.ts";
-import { buildSeqMap, remapSurfaceOp, rowToEvent, rowToMeta, scanRows } from "../src/log.ts";
+import {
+  buildSeqMap,
+  remapShadowedRange,
+  remapSurfaceOp,
+  rowToEvent,
+  rowToMeta,
+  scanRows,
+} from "../src/log.ts";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   eventDimensions,
   isEphemeralType,
+  isPersistedEvent,
   SESSION_PERSISTENCE_SQLITE_APPLICATION_ID,
   type EventRow,
   type SessionRow,
 } from "../src/schema.ts";
 import { openDatabase } from "../src/sqlite.ts";
-import {
-  runPersistenceContract,
-  meta,
-  oneTurnLog,
-  appendLog,
-} from "./contract.ts";
-import {
-  runCoordinatorContract,
-  type CoordinatorFixture,
-} from "./coordinator-contract.ts";
+import { runPersistenceContract, meta, oneTurnLog, appendLog } from "./contract.ts";
+import { runCoordinatorContract, type CoordinatorFixture } from "./coordinator-contract.ts";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -261,6 +266,30 @@ describe("isEphemeralType / EPHEMERAL_EVENT_TYPES", () => {
   });
 });
 
+describe("isPersistedEvent", () => {
+  const ev = (extra: Partial<SessionEvent> = {}): SessionEvent =>
+    ({ type: "plugin/x", seq: 0, time: 1, data: null, ...extra }) as SessionEvent;
+
+  it("drops ephemeral types and ignorable events, keeps everything else", () => {
+    expect(isPersistedEvent(ev({ type: "assistant/chunk" }))).toBe(false);
+    expect(isPersistedEvent(ev({ ignorable: true }))).toBe(false);
+    // An ephemeral type marked ignorable is dropped either way.
+    expect(isPersistedEvent(ev({ type: "assistant/chunk", ignorable: true }))).toBe(false);
+    expect(isPersistedEvent(ev())).toBe(true);
+    // A non-`true` ignorable value is a dirty envelope (only `true` is legal);
+    // treat it as a required event: persist it, and let the read path's
+    // assertEventsSupported refuse the unknown type.
+    const dirty = {
+      type: "plugin/x",
+      seq: 0,
+      time: 1,
+      data: null,
+      ignorable: false,
+    } as unknown as SessionEvent;
+    expect(isPersistedEvent(dirty)).toBe(true);
+  });
+});
+
 describe("scanRows", () => {
   // scanRows works off EventRows (data is a JSON string column); build them from
   // SessionEvents so the unit tests read in terms of the event vocabulary. With
@@ -477,6 +506,138 @@ describe("rowToEvent", () => {
     expect((event as SurfaceEvent).sourceEventSeqs).toEqual([5]);
     expect((event as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 5, end: 5 });
   });
+
+  it("remaps a compact/summary shadowedRange through the upstream→persisted seq map", () => {
+    // The metering event's shadow-price claim names the replaced range by
+    // UPSTREAM seq; it must follow the replace's surfaceOp into dense space or
+    // the token-meter fold rejects the log ("token surface: replace ... has no
+    // adjacent shadow price").
+    const row: EventRow = {
+      fSequence: 4056,
+      fOriginalSeq: 400_000,
+      fKind: "compact/summary",
+      fCreatedAt: 1,
+      fData: JSON.stringify({
+        turn: 1,
+        summary: "…",
+        shadowedRange: { start: 15, end: 398_881 },
+        shadowedTokenCount: 12_345,
+      }),
+      fSourceEventSeqs: null,
+      fSurfaceOp: null,
+    };
+    const map = new Map<number, number>([
+      [15, 15],
+      [398_881, 4048],
+      [400_000, 4056],
+    ]);
+    const event = rowToEvent(row, map);
+    expect(event.data).toMatchObject({
+      shadowedRange: { start: 15, end: 4048 },
+      shadowedTokenCount: 12_345,
+    });
+  });
+
+  it("remaps a compact/prune shadowedRange and leaves other data untouched", () => {
+    const row: EventRow = {
+      fSequence: 3,
+      fOriginalSeq: 10,
+      fKind: "compact/prune",
+      fCreatedAt: 1,
+      fData: JSON.stringify({
+        turn: 2,
+        shadowedRange: { start: 7, end: 9 },
+        shadowedTokenCount: 42,
+      }),
+      fSourceEventSeqs: null,
+      fSurfaceOp: null,
+    };
+    const event = rowToEvent(
+      row,
+      new Map<number, number>([
+        [7, 1],
+        [9, 2],
+        [10, 3],
+      ]),
+    );
+    expect(event.data).toMatchObject({
+      turn: 2,
+      shadowedRange: { start: 1, end: 2 },
+      shadowedTokenCount: 42,
+    });
+  });
+
+  it("keeps a compact shadowedRange verbatim without a seq map (no delta filtering)", () => {
+    const row: EventRow = {
+      fSequence: 3,
+      fOriginalSeq: 3,
+      fKind: "compact/summary",
+      fCreatedAt: 1,
+      fData: JSON.stringify({
+        turn: 1,
+        shadowedRange: { start: 1, end: 2 },
+        shadowedTokenCount: 9,
+      }),
+      fSourceEventSeqs: null,
+      fSurfaceOp: null,
+    };
+    expect(rowToEvent(row).data).toMatchObject({
+      shadowedRange: { start: 1, end: 2 },
+      shadowedTokenCount: 9,
+    });
+  });
+
+  it("replays a compact seam so the shadow-price claim matches the replace range", () => {
+    // Regression for the reported history-load failure:
+    //   token surface: replace at seq 4057 over range 15-4048 has no adjacent
+    //   shadow price (armed claim covers 15-398881)
+    // The claim (compact/summary data.shadowedRange, upstream seqs) must land
+    // on the SAME dense range as the immediately following replace's surfaceOp.
+    const map = new Map<number, number>([
+      [15, 15],
+      [398_881, 4048],
+      [4056, 4056],
+      [4057, 4057],
+    ]);
+    const metering = rowToEvent(
+      {
+        fSequence: 4056,
+        fOriginalSeq: 4056,
+        fKind: "compact/summary",
+        fCreatedAt: 1,
+        fData: JSON.stringify({
+          turn: 1,
+          shadowedRange: { start: 15, end: 398_881 },
+          shadowedTokenCount: 12_345,
+        }),
+        fSourceEventSeqs: null,
+        fSurfaceOp: null,
+      },
+      map,
+    );
+    const replacement = rowToEvent(
+      {
+        fSequence: 4057,
+        fOriginalSeq: 4057,
+        fKind: "assistant/message",
+        fCreatedAt: 2,
+        fData: JSON.stringify({ turn: 1, step: 1, message: { role: "assistant", content: [] } }),
+        fSourceEventSeqs: JSON.stringify([15, 398_881]),
+        fSurfaceOp: JSON.stringify({ op: "replace", start: 15, end: 398_881 }),
+      },
+      map,
+    );
+    const claim = (metering.data as unknown as { shadowedRange: { start: number; end: number } })
+      .shadowedRange;
+    // The token-meter fold compares claim.start/end with op.start/end for exact
+    // equality — an un-remapped claim (15-398881) is exactly the reported failure.
+    expect((replacement as SurfaceEvent).surfaceOp).toEqual({
+      op: "replace",
+      start: 15,
+      end: 4048,
+    });
+    expect(claim).toEqual({ start: 15, end: 4048 });
+  });
 });
 
 describe("remapSurfaceOp", () => {
@@ -493,6 +654,15 @@ describe("remapSurfaceOp", () => {
       op: "replace",
       start: 20,
       end: 40,
+    });
+  });
+});
+
+describe("remapShadowedRange", () => {
+  it("remaps both ends of the shadowed range", () => {
+    expect(remapShadowedRange({ start: 15, end: 398_881 }, (seq) => seq - 10)).toEqual({
+      start: 5,
+      end: 398_871,
     });
   });
 });
@@ -566,14 +736,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
       VALUES (?, '', -1, ?, ?, ?, NULL, NULL, NULL, NULL, ?, 1)
     `).run(m.id, m.version, m.createdAt, m.cwd ?? null, "legacy-header-delta");
     let parent = "";
-    insertEventRow(
-      db,
-      m.id,
-      0,
-      "turn/start",
-      { turn: 1 },
-      parent,
-    );
+    insertEventRow(db, m.id, 0, "turn/start", { turn: 1 }, parent);
     parent = insertEventRow(
       db,
       m.id,
@@ -671,14 +834,7 @@ describe("SessionPersistenceSqlite: durability and crash semantics", () => {
     const head = db
       .prepare("SELECT f_head_event_id FROM t_sessions WHERE f_session_id = ?")
       .get(m.id) as { f_head_event_id: string };
-    insertEventRow(
-      db,
-      m.id,
-      6,
-      "turn/start",
-      { turn: 2 },
-      head.f_head_event_id,
-    );
+    insertEventRow(db, m.id, 6, "turn/start", { turn: 2 }, head.f_head_event_id);
     db.close();
 
     const b2 = await backend(path);
@@ -1100,6 +1256,49 @@ function chunkedTurnLog(): SessionEvent[] {
   ];
 }
 
+/**
+ * Mirror of `@deepseek-ai/dsh-token-meter`'s `foldSurfaceProjection` — the
+ * package is not resolvable from the configured registry, so the compact-seam
+ * regression test reproduces its O(1) shadow-price fold contract inline. The
+ * estimator is a constant stand-in; only the claim protocol is under test
+ * (a `compact/summary` / `compact/prune` arms a claim for its exact
+ * `shadowedRange`, the immediately following surface `replace` must consume
+ * that exact range, and a mismatch fails loud with the reported message).
+ */
+function mirrorSurfaceTokensFold(
+  claim: { start: number; end: number; tokens: number } | undefined,
+  event: SessionEvent,
+): {
+  deltaTokens: number;
+  claim: { start: number; end: number; tokens: number } | undefined;
+} {
+  const type = (event as { type: string }).type;
+  if (type === "compact/summary" || type === "compact/prune") {
+    const data = event.data as unknown as {
+      shadowedRange: { start: number; end: number };
+      shadowedTokenCount: number;
+    };
+    return {
+      deltaTokens: 0,
+      claim: {
+        start: data.shadowedRange.start,
+        end: data.shadowedRange.end,
+        tokens: data.shadowedTokenCount,
+      },
+    };
+  }
+  const op = (event as unknown as Partial<SurfaceEvent>).surfaceOp;
+  if (op === undefined || op === "append") return { deltaTokens: 1, claim: undefined };
+  if (claim === undefined) return { deltaTokens: 0, claim: undefined };
+  if (claim.start !== op.start || claim.end !== op.end) {
+    throw new Error(
+      `token surface: replace at seq ${event.seq} over range ${op.start}-${op.end} has no adjacent shadow price` +
+        ` (armed claim covers ${claim.start}-${claim.end})`,
+    );
+  }
+  return { deltaTokens: 1 - claim.tokens, claim: undefined };
+}
+
 describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never persisted)", () => {
   it("drops delta events at write time and re-numbers surviving events densely", async () => {
     const path = await freshDbPath();
@@ -1487,6 +1686,255 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
       reason: { kind: "interrupted" },
     });
     await b2.dispose();
+  });
+
+  it("drops ignorable events at write time and re-numbers surviving events densely", async () => {
+    const path = await freshDbPath();
+    const b = await backend(path);
+    const m = meta("ignorable-drop");
+    await b.ctx.sessionPersistence.create(m);
+    await b.ctx.sessionPersistence.append(m.id, [
+      { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
+      // Unknown plugin event marked ignorable: dropped, never persisted.
+      {
+        type: "plugin/test",
+        seq: 1,
+        time: 2,
+        data: null,
+        ignorable: true,
+      } as unknown as SessionEvent,
+      {
+        type: "user/message",
+        seq: 2,
+        time: 3,
+        data: createUserMessage({
+          content: [{ type: "text", text: "hi" }],
+          source: { kind: "user" },
+        }),
+        surfaceOp: "append",
+      },
+      { type: "turn/end", seq: 3, time: 4, data: { turn: 1, reason: { kind: "completed" } } },
+    ]);
+    // The ignorable event is absent from storage; survivors are dense.
+    const probe = openDatabase(path, "wal");
+    const rows = probe
+      .prepare(`
+      SELECT se.f_sequence, e.f_original_seq, e.f_kind FROM t_session_events se
+      JOIN t_events e ON se.f_event_id = e.f_event_id
+      WHERE se.f_session_id = ? ORDER BY se.f_sequence
+    `)
+      .all(m.id) as { f_sequence: number; f_original_seq: number; f_kind: string }[];
+    expect(rows).toEqual([
+      { f_sequence: 0, f_original_seq: 0, f_kind: "turn/start" },
+      { f_sequence: 1, f_original_seq: 2, f_kind: "user/message" },
+      { f_sequence: 2, f_original_seq: 3, f_kind: "turn/end" },
+    ]);
+    probe.close();
+    const loaded = await b.ctx.sessionPersistence.load(m.id);
+    expect(loaded.events.map((e) => e.type)).toEqual(["turn/start", "user/message", "turn/end"]);
+    expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2]);
+    await b.dispose();
+  });
+
+  it("a batch containing only ignorable events is a no-op (no materialization, no revision)", async () => {
+    const path = await freshDbPath();
+    const b = await backend(path);
+    const m = meta("ignorable-only");
+    await b.ctx.sessionPersistence.create(m);
+    await b.ctx.sessionPersistence.append(m.id, [
+      {
+        type: "plugin/test",
+        seq: 0,
+        time: 1,
+        data: null,
+        ignorable: true,
+      } as unknown as SessionEvent,
+    ]);
+    // Nothing was materialized: the session is absent from list/snapshots.
+    expect(await b.ctx.sessionPersistence.list()).toEqual([]);
+    expect(await b.ctx.sessionPersistence.listSnapshots()).toEqual([]);
+    // The session remains appendable; the dropped event occupied upstream seq 0,
+    // so the next batch starts at upstream seq 1 and lands at dense seq 0.
+    await b.ctx.sessionPersistence.append(
+      m.id,
+      oneTurnLog().map((e) => ({ ...e, seq: e.seq + 1 })),
+    );
+    expect(await b.ctx.sessionPersistence.list()).toHaveLength(1);
+    const loaded = await b.ctx.sessionPersistence.load(m.id);
+    expect(loaded.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+    await b.dispose();
+  });
+
+  it("prunes assistant/message sourceEventSeqs references to dropped ignorable events", async () => {
+    const path = await freshDbPath();
+    const b = await backend(path);
+    const m = meta("ignorable-prune");
+    await b.ctx.sessionPersistence.create(m);
+    // The assistant/message references the ignorable plugin event (upstream
+    // seq 1), which is dropped at write time — the reference must not persist.
+    await b.ctx.sessionPersistence.append(m.id, [
+      { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
+      {
+        type: "plugin/test",
+        seq: 1,
+        time: 2,
+        data: null,
+        ignorable: true,
+      } as unknown as SessionEvent,
+      {
+        type: "assistant/message",
+        seq: 2,
+        time: 3,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "hello" }],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+        },
+        surfaceOp: "append",
+        sourceEventSeqs: [1],
+      },
+      { type: "turn/end", seq: 3, time: 4, data: { turn: 1, reason: { kind: "completed" } } },
+    ]);
+    const probe = openDatabase(path, "wal");
+    const row = probe
+      .prepare(
+        "SELECT e.f_source_event_seqs AS ses FROM t_session_events se JOIN t_events e ON se.f_event_id = e.f_event_id WHERE se.f_session_id = ? AND e.f_kind = 'assistant/message'",
+      )
+      .get(m.id) as { ses: string | null };
+    expect(row.ses).toBeNull();
+    probe.close();
+    const loaded = await b.ctx.sessionPersistence.load(m.id);
+    const assistant = loaded.events.find((e) => e.type === "assistant/message")!;
+    expect(assistant.seq).toBe(1); // dense
+    expect((assistant as SurfaceEvent).sourceEventSeqs).toBeUndefined();
+    await b.dispose();
+  });
+
+  it("replays a compact seam so the shadow-price claim matches the dense replace range", async () => {
+    // Regression for the reported history-load failure:
+    //   token surface: replace at seq 4057 over range 15-4048 has no adjacent
+    //   shadow price (armed claim covers 15-398881)
+    // Turn 1 establishes two surface nodes with chunk deltas dropped at write
+    // time; turn 2 compacts them — compact/summary meters the shadowed range
+    // (UPSTREAM seqs 1-5) and the adjacent assistant/message replaces it. After
+    // the dense renumbering, both the claim and the replace range must land on
+    // the same DENSE seqs for the token-meter fold to consume the claim.
+    const path = await freshDbPath();
+    const b = await backend(path);
+    const m = meta("compact-seam");
+    await b.ctx.sessionPersistence.create(m);
+    const log = [
+      { type: "turn/start", seq: 0, time: 1, data: { turn: 1 } },
+      {
+        type: "user/message",
+        seq: 1,
+        time: 2,
+        data: createUserMessage({
+          content: [{ type: "text", text: "hi" }],
+          source: { kind: "user" },
+        }),
+        surfaceOp: "append",
+      },
+      { type: "step/start", seq: 2, time: 3, data: { turn: 1, step: 1 } },
+      {
+        type: "assistant/chunk",
+        seq: 3,
+        time: 4,
+        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "he" } },
+      },
+      {
+        type: "assistant/chunk",
+        seq: 4,
+        time: 5,
+        data: { turn: 1, step: 1, chunk: { type: "text-delta", index: 0, text: "llo" } },
+      },
+      {
+        type: "assistant/message",
+        seq: 5,
+        time: 6,
+        data: {
+          turn: 1,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "hello" }],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+        },
+        surfaceOp: "append",
+        sourceEventSeqs: [3, 4],
+      },
+      { type: "step/end", seq: 6, time: 7, data: { turn: 1, step: 1 } },
+      { type: "turn/end", seq: 7, time: 8, data: { turn: 1, reason: { kind: "completed" } } },
+      { type: "turn/start", seq: 8, time: 9, data: { turn: 2 } },
+      { type: "step/start", seq: 9, time: 10, data: { turn: 2, step: 1 } },
+      { type: "compact/start", seq: 10, time: 11, data: { turn: 2 } },
+      {
+        type: "compact/summary",
+        seq: 11,
+        time: 12,
+        data: {
+          turn: 2,
+          summary: "compacted",
+          shadowedRange: { start: 1, end: 5 },
+          shadowedTokenCount: 100,
+        },
+      },
+      {
+        type: "assistant/message",
+        seq: 12,
+        time: 13,
+        data: {
+          turn: 2,
+          step: 1,
+          message: createMessage({
+            role: "assistant",
+            content: [{ type: "text", text: "compacted" }],
+            source: { kind: "model", provider: "mock", model: "mock" },
+          }),
+        },
+        surfaceOp: { op: "replace", start: 1, end: 5 },
+        sourceEventSeqs: [1, 5],
+      },
+      { type: "step/end", seq: 13, time: 14, data: { turn: 2, step: 1 } },
+      { type: "turn/end", seq: 14, time: 15, data: { turn: 2, reason: { kind: "completed" } } },
+    ] as unknown as SessionEvent[];
+    await b.ctx.sessionPersistence.append(m.id, log);
+
+    const loaded = await b.ctx.sessionPersistence.load(m.id);
+    const metering = loaded.events.find((e) => (e as { type: string }).type === "compact/summary");
+    const replacement = loaded.events.find((e) => e.type === "assistant/message" && e.seq > 5);
+    expect(metering).toBeDefined();
+    expect(replacement).toBeDefined();
+    // Both the claim and the replacement range land on DENSE seqs.
+    const claimRange = (
+      metering!.data as unknown as { shadowedRange: { start: number; end: number } }
+    ).shadowedRange;
+    const op = (replacement as SurfaceEvent).surfaceOp;
+    expect(op).toEqual({ op: "replace", start: 1, end: 3 });
+    expect((replacement as SurfaceEvent).sourceEventSeqs).toEqual([1, 3]);
+    expect(claimRange).toEqual({ start: 1, end: 3 });
+
+    // The token-meter fold must consume the armed claim instead of throwing
+    // the reported "has no adjacent shadow price" error.
+    let claim: { start: number; end: number; tokens: number } | undefined;
+    let armed = 0;
+    let consumed = 0;
+    expect(() => {
+      for (const event of loaded.events) {
+        if ((event as { type: string }).type === "compact/summary") armed += 1;
+        const fold = mirrorSurfaceTokensFold(claim, event);
+        if (claim !== undefined && fold.claim === undefined) consumed += 1;
+        claim = fold.claim;
+      }
+    }).not.toThrow();
+    expect(armed).toBe(1);
+    expect(consumed).toBe(1);
+    await b.dispose();
   });
 });
 

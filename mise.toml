@@ -1,3 +1,4 @@
 [tools]
-nub = 'latest'
+node = "26.7.0"
+nub = '0.7.5'
 just = 'latest'

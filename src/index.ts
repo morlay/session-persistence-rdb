@@ -50,7 +50,7 @@ import {
   DEFAULT_BUSY_TIMEOUT_MS,
   eventDimensions,
   EVENT_ENCODING,
-  isEphemeralType,
+  isPersistedEvent,
   type JournalMode,
 } from "./schema.ts";
 import { SqliteBackend } from "./sqlite.ts";
@@ -135,6 +135,9 @@ export class SessionPersistenceRdb
    * see the JSONL backend for why this does not affect service resolution.
    */
   override readonly name = "session-persistence-rdb";
+
+  /** One RDB database holds every session; there is no per-session raw artifact. */
+  override readonly supportsRawArtifacts = false;
 
   private readonly backend: Backend;
   private storeIdentity!: string;
@@ -361,13 +364,13 @@ export class SessionPersistenceRdb
 
   /**
    * Durably append a batch in ONE transaction: materialize the sessions row (if
-   * lazy) and INSERT every non-ephemeral event (plus its bridge row), or roll
-   * back entirely. Delta events are dropped and the surviving events are
-   * re-numbered densely from the session's head cursor; a batch that contains
-   * only delta events is a no-op (no row materialization, no revision bump).
-   * Dropped deltas' upstream seqs are recorded per session so a later batch's
-   * surface provenance can prune references to them (see
-   * {@link surfaceBindings}).
+   * lazy) and INSERT every persisted event (plus its bridge row), or roll back
+   * entirely. Delta events and events the writer marked `ignorable` are dropped
+   * and the surviving events are re-numbered densely from the session's head
+   * cursor; a batch that contains only dropped events is a no-op (no row
+   * materialization, no revision bump). Dropped events' upstream seqs are
+   * recorded per session so a later batch's surface provenance can prune
+   * references to them (see {@link surfaceBindings}).
    * The transaction is the atomicity + durability boundary, so a mid-batch
    * failure (a UNIQUE violation on a duplicated seq) leaves the stored log
    * untouched.
@@ -396,10 +399,10 @@ export class SessionPersistenceRdb
     // to events that never got a persisted row (see {@link surfaceBindings}).
     const droppedSeqs = new Set<number>();
     for (const event of events) {
-      if (isEphemeralType(event.type)) droppedSeqs.add(event.seq);
+      if (!isPersistedEvent(event)) droppedSeqs.add(event.seq);
     }
     if (droppedSeqs.size > 0) this.writeGuard.noteDropped(meta.id, droppedSeqs);
-    const persisted = events.filter((event) => !isEphemeralType(event.type));
+    const persisted = events.filter(isPersistedEvent);
     if (persisted.length === 0) return;
     let confirmedHead = -1;
     await this.backend.transaction(async (tx) => {
@@ -459,7 +462,7 @@ export class SessionPersistenceRdb
     closers: readonly SessionEvent[],
   ): Promise<void> {
     await this.ready;
-    const persistedClosers = closers.filter((event) => !isEphemeralType(event.type));
+    const persistedClosers = closers.filter(isPersistedEvent);
     if (tornMarker === undefined && persistedClosers.length === 0) return;
     await this.backend.transaction(async (tx) => {
       if (tornMarker !== undefined) {

@@ -6,7 +6,8 @@
  *
  * delta 过滤（`assistant/chunk` 不落库）后，持久化 seq 是稠密重编号的；
  * `buildSeqMap` 提供 上游 seq → 持久化 seq 的映射，`rowToEvent` /
- * `remapSurfaceOp` 经它把 `sourceEventSeqs` 与 `replace` 范围重映射回稠密
+ * `remapSurfaceOp` / `remapShadowedRange` 经它把 `sourceEventSeqs`、
+ * `replace` 范围与 compact 计量事件的 `shadowedRange` 重映射回稠密
  * seq 空间。`scanRows` 实现崩溃尾部语义（torn tail 切割 + 提交区损坏拒绝）。
  *
  * @module @morlay/session-persistence-rdb/log
@@ -53,12 +54,33 @@ export function remapSurfaceOp(op: SurfaceOp, remap: (seq: number) => number): S
 }
 
 /**
+ * The compact metering events (`compact/summary`, `compact/prune`) carry the
+ * token-meter's shadow-price claim in `data.shadowedRange`: the inclusive
+ * surface-node seqs of the range the IMMEDIATELY following surface `replace`
+ * shadows. The range names surface nodes by UPSTREAM seq, so it must follow
+ * the replace's `surfaceOp` through the same upstream→persisted map — the
+ * fold compares claim and replacement ranges for exact equality, and an
+ * un-remapped claim (upstream) next to a remapped replacement range (dense)
+ * makes replay fail loud ("token surface: replace ... has no adjacent shadow
+ * price").
+ * @param range - the stored shadowed range (upstream seqs).
+ * @param remap - upstream→persisted seq mapping (identity when absent).
+ * @returns the remapped shadowed range.
+ */
+export function remapShadowedRange(
+  range: { start: number; end: number },
+  remap: (seq: number) => number,
+): { start: number; end: number } {
+  return { start: remap(range.start), end: remap(range.end) };
+}
+
+/**
  * Reconstruct a {@link SessionEvent} from a joined row. The emitted event
- * carries the DENSE persisted seq (`row.fSequence`); `sourceEventSeqs` entries
- * and a positional `replace` {@link SurfaceOp}'s range are remapped from
- * upstream seqs to persisted seqs through `seqMap` when the log was
- * delta-filtered (an entry missing from the map is kept verbatim — tolerated
- * like a scan hole, not corruption).
+ * carries the DENSE persisted seq (`row.fSequence`); `sourceEventSeqs` entries,
+ * a positional `replace` {@link SurfaceOp}'s range, and the compact metering
+ * events' `shadowedRange` are remapped from upstream seqs to persisted seqs
+ * through `seqMap` when the log was delta-filtered (an entry missing from the
+ * map is kept verbatim — tolerated like a scan hole, not corruption).
  * @param row - the joined `t_session_events` + `t_events` row.
  * @param seqMap - upstream→persisted seq map, present only when delta filtering
  *   re-numbered the log (optional).
@@ -81,11 +103,21 @@ export function rowToEvent(row: EventRow, seqMap?: ReadonlyMap<number, number>):
         }
       : {}),
   };
+  const data = JSON.parse(row.fData) as SessionEvent["data"];
+  // `compact/summary` / `compact/prune` are plugin-merged types whose metering
+  // data is not part of the core `SessionEventMap`; narrow through a structural
+  // view to remap the shadow-price claim's range (see {@link remapShadowedRange}).
+  if (row.fKind === "compact/summary" || row.fKind === "compact/prune") {
+    const metering = data as unknown as { shadowedRange?: { start: number; end: number } };
+    if (metering.shadowedRange !== undefined) {
+      metering.shadowedRange = remapShadowedRange(metering.shadowedRange, remap);
+    }
+  }
   return {
     type: row.fKind as SessionEvent["type"],
     seq: row.fSequence,
     time: row.fCreatedAt,
-    data: JSON.parse(row.fData) as SessionEvent["data"],
+    data,
     ...surfaceFields,
   } as SessionEvent;
 }

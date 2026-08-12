@@ -72,6 +72,14 @@ tool/call 等）的部分原样保留并在读取时重映射。
 已知代价：同一会话的库内 seq 与上游内存 seq 不同（差一个已过滤的 delta 计数）；上游
 未来按提案给 chunk 分配独立通道（不占 seq）后，两套 seq 将自然合一。
 
+**compact 计量事件的 `shadowedRange` 读取时重映射**：`compact/summary` /
+`compact/prune` 事件在 `data.shadowedRange` 里携带 token-meter 的 shadow-price
+claim（被紧随其后的 surface `replace` 覆盖的节点范围，按上游 seq 命名）。写路径原样
+落库（引用的全是已持久化的 surface 节点，不会被 delta 过滤，无需剔除）；读取时
+`rowToEvent` 经 `remapShadowedRange` 把它与 `replace` 的 `surfaceOp` 一样重映射回稠密
+seq 空间——否则 claim（上游空间）与 replace 范围（稠密空间）不一致，token-meter 折叠
+会以 `token surface: replace ... has no adjacent shadow price` 拒绝重放（历史加载失败）。
+
 ### 并发写入者检测（多个实例/进程共享同一数据库）
 
 本后端的事件按**稠密 seq** 重编号（delta 过滤后），而每个
