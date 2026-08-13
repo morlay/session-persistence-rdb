@@ -3,9 +3,9 @@
  * 读取配置时回落到 entry config（与无 settings 服务的语义一致，但满足
  * `static inject: ['settings']` 的依赖要求）。
  */
-import { Settings, type SettingsNamespace } from "@deepseek-ai/dsh-settings";
+import { SettingsProvider, type SettingsNamespace } from "@deepseek-ai/dsh-settings";
 
-export class EmptySettings extends Settings {
+export class EmptySettings extends SettingsProvider {
   get writable(): boolean {
     return true;
   }

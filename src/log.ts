@@ -54,7 +54,7 @@ export function remapSurfaceOp(op: SurfaceOp, remap: (seq: number) => number): S
 }
 
 /**
- * The compact metering events (`compact/summary`, `compact/prune`) carry the
+ * The compact metering events (`compaction/summary`, `compaction/prune`) carry the
  * token-meter's shadow-price claim in `data.shadowedRange`: the inclusive
  * surface-node seqs of the range the IMMEDIATELY following surface `replace`
  * shadows. The range names surface nodes by UPSTREAM seq, so it must follow
@@ -104,10 +104,11 @@ export function rowToEvent(row: EventRow, seqMap?: ReadonlyMap<number, number>):
       : {}),
   };
   const data = JSON.parse(row.fData) as SessionEvent["data"];
-  // `compact/summary` / `compact/prune` are plugin-merged types whose metering
-  // data is not part of the core `SessionEventMap`; narrow through a structural
-  // view to remap the shadow-price claim's range (see {@link remapShadowedRange}).
-  if (row.fKind === "compact/summary" || row.fKind === "compact/prune") {
+  // `compaction/summary` / `compaction/prune` are plugin-merged types whose
+  // metering data is not part of the core `SessionEventMap`; narrow through a
+  // structural view to remap the shadow-price claim's range (see
+  // {@link remapShadowedRange}).
+  if (row.fKind === "compaction/summary" || row.fKind === "compaction/prune") {
     const metering = data as unknown as { shadowedRange?: { start: number; end: number } };
     if (metering.shadowedRange !== undefined) {
       metering.shadowedRange = remapShadowedRange(metering.shadowedRange, remap);

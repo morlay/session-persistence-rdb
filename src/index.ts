@@ -23,7 +23,7 @@
 
 import { Context } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
-import { settingsNamespace, type Settings } from "@deepseek-ai/dsh-settings";
+import { settingsNamespace, type SettingsProvider } from "@deepseek-ai/dsh-settings";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
@@ -161,11 +161,11 @@ export class SessionPersistenceRdb
   ) {
     // settings.yaml 的 `session-persistence-rdb` namespace 覆盖 cordis 层 entry
     // config（base）。settings 服务已注册时（dsh 环境；服务注册完成即初始
-    // publish 完成，见 Settings[Service.init]）同步 register 读取；settings
+    // publish 完成，见 SettingsProvider[Service.init]）同步 register 读取；settings
     // 服务缺失时（纯 cordis 装配/测试）退化为 entry config。经 ctx.reflect
     // 查询避免未 inject 的 ctx 服务访问守卫。
     let resolved: Config = config;
-    const settings = ctx.reflect.get("settings") as unknown as Settings | undefined;
+    const settings = ctx.reflect.get("settings") as unknown as SettingsProvider | undefined;
     if (settings !== undefined) {
       const scope = settings.register(
         SessionPersistenceRdb.settingsNs,

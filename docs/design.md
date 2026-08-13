@@ -72,8 +72,8 @@ tool/call 等）的部分原样保留并在读取时重映射。
 已知代价：同一会话的库内 seq 与上游内存 seq 不同（差一个已过滤的 delta 计数）；上游
 未来按提案给 chunk 分配独立通道（不占 seq）后，两套 seq 将自然合一。
 
-**compact 计量事件的 `shadowedRange` 读取时重映射**：`compact/summary` /
-`compact/prune` 事件在 `data.shadowedRange` 里携带 token-meter 的 shadow-price
+**compact 计量事件的 `shadowedRange` 读取时重映射**：`compaction/summary` /
+`compaction/prune` 事件在 `data.shadowedRange` 里携带 token-meter 的 shadow-price
 claim（被紧随其后的 surface `replace` 覆盖的节点范围，按上游 seq 命名）。写路径原样
 落库（引用的全是已持久化的 surface 节点，不会被 delta 过滤，无需剔除）；读取时
 `rowToEvent` 经 `remapShadowedRange` 把它与 `replace` 的 `surfaceOp` 一样重映射回稠密

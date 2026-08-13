@@ -507,7 +507,7 @@ describe("rowToEvent", () => {
     expect((event as SurfaceEvent).surfaceOp).toEqual({ op: "replace", start: 5, end: 5 });
   });
 
-  it("remaps a compact/summary shadowedRange through the upstream→persisted seq map", () => {
+  it("remaps a compaction/summary shadowedRange through the upstream→persisted seq map", () => {
     // The metering event's shadow-price claim names the replaced range by
     // UPSTREAM seq; it must follow the replace's surfaceOp into dense space or
     // the token-meter fold rejects the log ("token surface: replace ... has no
@@ -515,7 +515,7 @@ describe("rowToEvent", () => {
     const row: EventRow = {
       fSequence: 4056,
       fOriginalSeq: 400_000,
-      fKind: "compact/summary",
+      fKind: "compaction/summary",
       fCreatedAt: 1,
       fData: JSON.stringify({
         turn: 1,
@@ -538,11 +538,11 @@ describe("rowToEvent", () => {
     });
   });
 
-  it("remaps a compact/prune shadowedRange and leaves other data untouched", () => {
+  it("remaps a compaction/prune shadowedRange and leaves other data untouched", () => {
     const row: EventRow = {
       fSequence: 3,
       fOriginalSeq: 10,
-      fKind: "compact/prune",
+      fKind: "compaction/prune",
       fCreatedAt: 1,
       fData: JSON.stringify({
         turn: 2,
@@ -571,7 +571,7 @@ describe("rowToEvent", () => {
     const row: EventRow = {
       fSequence: 3,
       fOriginalSeq: 3,
-      fKind: "compact/summary",
+      fKind: "compaction/summary",
       fCreatedAt: 1,
       fData: JSON.stringify({
         turn: 1,
@@ -591,7 +591,7 @@ describe("rowToEvent", () => {
     // Regression for the reported history-load failure:
     //   token surface: replace at seq 4057 over range 15-4048 has no adjacent
     //   shadow price (armed claim covers 15-398881)
-    // The claim (compact/summary data.shadowedRange, upstream seqs) must land
+    // The claim (compaction/summary data.shadowedRange, upstream seqs) must land
     // on the SAME dense range as the immediately following replace's surfaceOp.
     const map = new Map<number, number>([
       [15, 15],
@@ -603,7 +603,7 @@ describe("rowToEvent", () => {
       {
         fSequence: 4056,
         fOriginalSeq: 4056,
-        fKind: "compact/summary",
+        fKind: "compaction/summary",
         fCreatedAt: 1,
         fData: JSON.stringify({
           turn: 1,
@@ -1261,7 +1261,7 @@ function chunkedTurnLog(): SessionEvent[] {
  * package is not resolvable from the configured registry, so the compact-seam
  * regression test reproduces its O(1) shadow-price fold contract inline. The
  * estimator is a constant stand-in; only the claim protocol is under test
- * (a `compact/summary` / `compact/prune` arms a claim for its exact
+ * (a `compaction/summary` / `compaction/prune` arms a claim for its exact
  * `shadowedRange`, the immediately following surface `replace` must consume
  * that exact range, and a mismatch fails loud with the reported message).
  */
@@ -1273,7 +1273,7 @@ function mirrorSurfaceTokensFold(
   claim: { start: number; end: number; tokens: number } | undefined;
 } {
   const type = (event as { type: string }).type;
-  if (type === "compact/summary" || type === "compact/prune") {
+  if (type === "compaction/summary" || type === "compaction/prune") {
     const data = event.data as unknown as {
       shadowedRange: { start: number; end: number };
       shadowedTokenCount: number;
@@ -1819,7 +1819,7 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     //   token surface: replace at seq 4057 over range 15-4048 has no adjacent
     //   shadow price (armed claim covers 15-398881)
     // Turn 1 establishes two surface nodes with chunk deltas dropped at write
-    // time; turn 2 compacts them — compact/summary meters the shadowed range
+    // time; turn 2 compacts them — compaction/summary meters the shadowed range
     // (UPSTREAM seqs 1-5) and the adjacent assistant/message replaces it. After
     // the dense renumbering, both the claim and the replace range must land on
     // the same DENSE seqs for the token-meter fold to consume the claim.
@@ -1872,9 +1872,9 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
       { type: "turn/end", seq: 7, time: 8, data: { turn: 1, reason: { kind: "completed" } } },
       { type: "turn/start", seq: 8, time: 9, data: { turn: 2 } },
       { type: "step/start", seq: 9, time: 10, data: { turn: 2, step: 1 } },
-      { type: "compact/start", seq: 10, time: 11, data: { turn: 2 } },
+      { type: "compaction/start", seq: 10, time: 11, data: { turn: 2 } },
       {
-        type: "compact/summary",
+        type: "compaction/summary",
         seq: 11,
         time: 12,
         data: {
@@ -1906,7 +1906,9 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     await b.ctx.sessionPersistence.append(m.id, log);
 
     const loaded = await b.ctx.sessionPersistence.load(m.id);
-    const metering = loaded.events.find((e) => (e as { type: string }).type === "compact/summary");
+    const metering = loaded.events.find(
+      (e) => (e as { type: string }).type === "compaction/summary",
+    );
     const replacement = loaded.events.find((e) => e.type === "assistant/message" && e.seq > 5);
     expect(metering).toBeDefined();
     expect(replacement).toBeDefined();
@@ -1926,7 +1928,7 @@ describe("SessionPersistenceSqlite: delta filtering (ephemeral chunks never pers
     let consumed = 0;
     expect(() => {
       for (const event of loaded.events) {
-        if ((event as { type: string }).type === "compact/summary") armed += 1;
+        if ((event as { type: string }).type === "compaction/summary") armed += 1;
         const fold = mirrorSurfaceTokensFold(claim, event);
         if (claim !== undefined && fold.claim === undefined) consumed += 1;
         claim = fold.claim;
