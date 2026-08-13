@@ -43,7 +43,7 @@ import type {
   SessionId,
   SessionHeader,
 } from "@deepseek-ai/dsh-session";
-import { type Backend, type EventRow } from "./backend.ts";
+import { type Backend, type BackendTx, type EventInsert, type EventRow } from "./backend.ts";
 import { WriteGuard } from "./write-guard.ts";
 import { buildSeqMap, rowToMeta, scanRows } from "./log.ts";
 import {
@@ -415,35 +415,16 @@ export class SessionPersistenceRdb
       // writer's tail and corrupt the log. The on-disk head must equal the
       // last head this instance confirmed (via its own writes or loadStored).
       this.writeGuard.assertNoConcurrentWriter(meta.id, head.fHeadSequence);
-      let parentId = head.fHeadEventId;
-      let nextSeq = head.fHeadSequence + 1;
-      for (const event of persisted) {
-        const eventId = randomUUID();
-        const { role, name, actionId } = eventDimensions(event);
-        const [surfaceSeqs, surfaceOp] = surfaceBindings(event, (refs) =>
-          this.writeGuard.pruneRefs(meta.id, refs),
-        );
-        await tx.insertEvent({
-          fEventId: eventId,
-          fParentId: parentId,
-          fKind: event.type,
-          fRole: role,
-          fName: name,
-          fActionId: actionId,
-          fEncoding: EVENT_ENCODING,
-          fData: JSON.stringify(event.data),
-          fCreatedAt: event.time,
-          fOriginalSeq: event.seq,
-          fSourceEventSeqs: surfaceSeqs,
-          fSurfaceOp: surfaceOp,
-        });
-        await tx.insertBridge(meta.id, eventId, nextSeq);
-        parentId = eventId;
-        nextSeq++;
-      }
-      await tx.updateHead(meta.id, parentId, nextSeq - 1);
+      const { headEventId, headSequence } = await appendEventTail(
+        tx,
+        meta,
+        persisted,
+        { parentId: head.fHeadEventId, nextSeq: head.fHeadSequence + 1 },
+        (refs) => this.writeGuard.pruneRefs(meta.id, refs),
+      );
+      await tx.updateHead(meta.id, headEventId, headSequence);
       await tx.bumpRevision(meta.id);
-      confirmedHead = nextSeq - 1;
+      confirmedHead = headSequence;
     });
     // Confirm the new head only after the commit: a rollback must not leave
     // a confirmed head this instance did not actually write.
@@ -481,31 +462,13 @@ export class SessionPersistenceRdb
         // hand-written torn tail never updated it), so a closer must follow the
         // last physical row, not the cursor.
         const last = await tx.getLastBridge(meta.id);
-        let parentId = last?.fEventId ?? "";
-        let nextSeq = (last?.fSequence ?? -1) + 1;
-        for (const event of persistedClosers) {
-          const eventId = randomUUID();
-          const { role, name, actionId } = eventDimensions(event);
-          const [surfaceSeqs, surfaceOp] = surfaceBindings(event);
-          await tx.insertEvent({
-            fEventId: eventId,
-            fParentId: parentId,
-            fKind: event.type,
-            fRole: role,
-            fName: name,
-            fActionId: actionId,
-            fEncoding: EVENT_ENCODING,
-            fData: JSON.stringify(event.data),
-            fCreatedAt: event.time,
-            fOriginalSeq: event.seq,
-            fSourceEventSeqs: surfaceSeqs,
-            fSurfaceOp: surfaceOp,
-          });
-          await tx.insertBridge(meta.id, eventId, nextSeq);
-          parentId = eventId;
-          nextSeq++;
-        }
-        await tx.updateHead(meta.id, parentId, nextSeq - 1);
+        const { headEventId, headSequence } = await appendEventTail(
+          tx,
+          meta,
+          persistedClosers,
+          { parentId: last?.fEventId ?? "", nextSeq: (last?.fSequence ?? -1) + 1 },
+        );
+        await tx.updateHead(meta.id, headEventId, headSequence);
       }
       await tx.bumpRevision(meta.id);
     });
@@ -597,6 +560,68 @@ function surfaceBindings(
     sourceSeqs !== undefined && sourceSeqs.length > 0 ? JSON.stringify(sourceSeqs) : null,
     se.surfaceOp !== undefined ? JSON.stringify(se.surfaceOp) : null,
   ];
+}
+
+/**
+ * Durably append one batch of persisted events to a session's tail inside the
+ * enclosing transaction: mint each event's row (parent chain + playpen
+ * dimensions + surface-metadata columns) and its bridge row, land both as ONE
+ * multi-row INSERT each (N events are 2 statements instead of 2N), and return
+ * the resulting head cursor.
+ *
+ * The anchor is the caller's responsibility: a normal append starts from the
+ * head cursor (`head.fHeadEventId` / `head.fHeadSequence + 1`), while
+ * crash-repair closers start from the ACTUAL tail row (the head cursor can lag
+ * a hand-written torn tail). Both callers then persist the returned cursor via
+ * {@link BackendTx.updateHead}.
+ * @param tx - the enclosing transaction.
+ * @param meta - the session being written (`meta.id` drives the bridge rows).
+ * @param events - persisted events to append (callers already filtered out
+ *   ephemeral/ignorable events; non-empty).
+ * @param anchor - the parent event id to chain from and the next dense seq.
+ * @param prune - forwarded to {@link surfaceBindings}; defaults to identity
+ *   (repair closers never carry provenance).
+ * @returns the new head cursor (last event id + its dense seq).
+ */
+async function appendEventTail(
+  tx: BackendTx,
+  meta: SessionHeader,
+  events: readonly SessionEvent[],
+  anchor: { parentId: string; nextSeq: number },
+  prune: (refs: readonly number[]) => readonly number[] = (refs) => refs,
+): Promise<{ headEventId: string; headSequence: number }> {
+  let parentId = anchor.parentId;
+  let nextSeq = anchor.nextSeq;
+  // Build both batches up front, then land them in ONE multi-row INSERT each:
+  // N events are 2 statements instead of 2N (fewer SQLite statements and fewer
+  // PostgreSQL round trips per commit).
+  const eventRows: EventInsert[] = [];
+  const bridgeRows: Array<{ fSessionId: SessionId; fEventId: string; fSequence: number }> = [];
+  for (const event of events) {
+    const eventId = randomUUID();
+    const { role, name, actionId } = eventDimensions(event);
+    const [surfaceSeqs, surfaceOp] = surfaceBindings(event, prune);
+    eventRows.push({
+      fEventId: eventId,
+      fParentId: parentId,
+      fKind: event.type,
+      fRole: role,
+      fName: name,
+      fActionId: actionId,
+      fEncoding: EVENT_ENCODING,
+      fData: JSON.stringify(event.data),
+      fCreatedAt: event.time,
+      fOriginalSeq: event.seq,
+      fSourceEventSeqs: surfaceSeqs,
+      fSurfaceOp: surfaceOp,
+    });
+    bridgeRows.push({ fSessionId: meta.id, fEventId: eventId, fSequence: nextSeq });
+    parentId = eventId;
+    nextSeq++;
+  }
+  await tx.insertEvents(eventRows);
+  await tx.insertBridges(bridgeRows);
+  return { headEventId: parentId, headSequence: nextSeq - 1 };
 }
 
 export default SessionPersistenceRdb;

@@ -80,10 +80,18 @@ export interface BackendTx {
   upsertSession(meta: SessionHeader, incarnation: string): Promise<void>;
   /** Fetch the head cursor; the caller materialized the row first. */
   getHead(id: SessionId): Promise<Pick<SessionRow, "fHeadEventId" | "fHeadSequence">>;
-  /** Insert one event row. */
-  insertEvent(event: EventInsert): Promise<void>;
-  /** Insert one session↔event bridge row. */
-  insertBridge(sessionId: SessionId, eventId: string, sequence: number): Promise<void>;
+  /**
+   * Insert event rows in ONE multi-row INSERT. Callers pass non-empty arrays;
+   * the implementation may no-op on an empty input.
+   */
+  insertEvents(events: EventInsert[]): Promise<void>;
+  /**
+   * Insert session↔event bridge rows in ONE multi-row INSERT. Callers pass
+   * non-empty arrays; the implementation may no-op on an empty input.
+   */
+  insertBridges(
+    rows: Array<{ fSessionId: SessionId; fEventId: string; fSequence: number }>,
+  ): Promise<void>;
   /** Move the head cursor forward. */
   updateHead(id: SessionId, headEventId: string, headSequence: number): Promise<void>;
   /** Increment the session's revision by one. */

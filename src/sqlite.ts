@@ -26,6 +26,7 @@ import {
 } from "./backend.ts";
 import { createTablesSql } from "./adapters/index.ts";
 import { sqliteTableDefs } from "./entities/index.ts";
+import { sessionConflictRow, sessionInsertRow } from "./log.ts";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   SCHEMA_VERSION,
@@ -325,8 +326,8 @@ export class SqliteBackend implements Backend {
   private readonly tx: BackendTx = {
     upsertSession: (meta, incarnation) => this.upsertSession(meta, incarnation),
     getHead: (id) => this.getHead(id),
-    insertEvent: (event) => this.insertEvent(event),
-    insertBridge: (sessionId, eventId, sequence) => this.insertBridge(sessionId, eventId, sequence),
+    insertEvents: (events) => this.insertEvents(events),
+    insertBridges: (rows) => this.insertBridges(rows),
     updateHead: (id, headEventId, headSequence) => this.updateHead(id, headEventId, headSequence),
     bumpRevision: (id) => this.bumpRevision(id),
     deleteBridgeTail: (id, fromSequence) => this.deleteBridgeTail(id, fromSequence),
@@ -339,31 +340,10 @@ export class SqliteBackend implements Backend {
   private async upsertSession(meta: SessionHeader, incarnation: string): Promise<void> {
     this.db
       .insert(tSessions)
-      .values({
-        fSessionId: meta.id,
-        fHeadEventId: "",
-        fHeadSequence: -1,
-        fVersion: meta.version,
-        fCreatedAt: meta.createdAt,
-        fCwd: meta.cwd ?? null,
-        fParentSession: meta.parentSession ?? null,
-        fSeedLength: meta.seedLength ?? null,
-        fOrigin: meta.origin ?? null,
-        fDelegationDepth: meta.delegationDepth ?? null,
-        fIncarnation: incarnation,
-        fRevision: 0,
-      })
+      .values(sessionInsertRow(meta, incarnation))
       .onConflictDoUpdate({
         target: tSessions.fSessionId,
-        set: {
-          fVersion: meta.version,
-          fCreatedAt: meta.createdAt,
-          fCwd: meta.cwd ?? null,
-          fParentSession: meta.parentSession ?? null,
-          fSeedLength: meta.seedLength ?? null,
-          fOrigin: meta.origin ?? null,
-          fDelegationDepth: meta.delegationDepth ?? null,
-        },
+        set: sessionConflictRow(meta),
       })
       .run();
   }
@@ -381,21 +361,21 @@ export class SqliteBackend implements Backend {
     return head;
   }
 
-  private async insertEvent(event: EventInsert): Promise<void> {
+  private async insertEvents(events: EventInsert[]): Promise<void> {
+    if (events.length === 0) return;
     this.db
       .insert(tEvents)
-      .values({ ...event })
+      .values(events.map((event) => ({ ...event })))
       .run();
   }
 
-  private async insertBridge(
-    sessionId: SessionId,
-    eventId: string,
-    sequence: number,
+  private async insertBridges(
+    rows: Array<{ fSessionId: SessionId; fEventId: string; fSequence: number }>,
   ): Promise<void> {
+    if (rows.length === 0) return;
     this.db
       .insert(tSessionEvents)
-      .values({ fSessionId: sessionId, fEventId: eventId, fSequence: sequence })
+      .values(rows.map((row) => ({ ...row })))
       .run();
   }
 

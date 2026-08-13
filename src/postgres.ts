@@ -26,6 +26,7 @@ import {
 import { SCHEMA_VERSION, SESSION_PERSISTENCE_SQLITE_APPLICATION_ID } from "./schema.ts";
 import { createTablesSql, toPostgresSchema } from "./adapters/index.ts";
 import { postgresTableDefs } from "./entities/index.ts";
+import { sessionConflictRow, sessionInsertRow } from "./log.ts";
 
 /**
  * PostgreSQL drizzle tables derived from the single entity definitions in
@@ -165,9 +166,8 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     return {
       upsertSession: (meta, incarnation) => this.upsertSession(tx, meta, incarnation),
       getHead: (id) => this.getHead(tx, id),
-      insertEvent: (event) => this.insertEvent(tx, event),
-      insertBridge: (sessionId, eventId, sequence) =>
-        this.insertBridge(tx, sessionId, eventId, sequence),
+      insertEvents: (events) => this.insertEvents(tx, events),
+      insertBridges: (rows) => this.insertBridges(tx, rows),
       updateHead: (id, headEventId, headSequence) =>
         this.updateHead(tx, id, headEventId, headSequence),
       bumpRevision: (id) => this.bumpRevision(tx, id),
@@ -197,31 +197,10 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
   ): Promise<void> {
     await exec
       .insert(pgSessions)
-      .values({
-        fSessionId: meta.id,
-        fHeadEventId: "",
-        fHeadSequence: -1,
-        fVersion: meta.version,
-        fCreatedAt: meta.createdAt,
-        fCwd: meta.cwd ?? null,
-        fParentSession: meta.parentSession ?? null,
-        fSeedLength: meta.seedLength ?? null,
-        fOrigin: meta.origin ?? null,
-        fDelegationDepth: meta.delegationDepth ?? null,
-        fIncarnation: incarnation,
-        fRevision: 0,
-      })
+      .values(sessionInsertRow(meta, incarnation))
       .onConflictDoUpdate({
         target: pgSessions.fSessionId,
-        set: {
-          fVersion: meta.version,
-          fCreatedAt: meta.createdAt,
-          fCwd: meta.cwd ?? null,
-          fParentSession: meta.parentSession ?? null,
-          fSeedLength: meta.seedLength ?? null,
-          fOrigin: meta.origin ?? null,
-          fDelegationDepth: meta.delegationDepth ?? null,
-        },
+        set: sessionConflictRow(meta),
       })
       .execute();
   }
@@ -242,22 +221,22 @@ export class PostgresBackend<THKT extends PgQueryResultHKT = PgQueryResultHKT> i
     return head;
   }
 
-  private async insertEvent(exec: PgAsyncDatabase<THKT>, event: EventInsert): Promise<void> {
+  private async insertEvents(exec: PgAsyncDatabase<THKT>, events: EventInsert[]): Promise<void> {
+    if (events.length === 0) return;
     await exec
       .insert(pgEvents)
-      .values({ ...event })
+      .values(events.map((event) => ({ ...event })))
       .execute();
   }
 
-  private async insertBridge(
+  private async insertBridges(
     exec: PgAsyncDatabase<THKT>,
-    sessionId: SessionId,
-    eventId: string,
-    sequence: number,
+    rows: Array<{ fSessionId: SessionId; fEventId: string; fSequence: number }>,
   ): Promise<void> {
+    if (rows.length === 0) return;
     await exec
       .insert(pgSessionEvents)
-      .values({ fSessionId: sessionId, fEventId: eventId, fSequence: sequence })
+      .values(rows.map((row) => ({ ...row })))
       .execute();
   }
 

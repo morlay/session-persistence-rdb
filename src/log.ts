@@ -38,6 +38,74 @@ export function rowToMeta(row: SessionRow): SessionHeader {
 }
 
 /**
+ * `t_sessions` 的 INSERT 列值：`SessionHeader` 的持久化字段 + 初始 head 游标
+ * （空事件 id、seq -1）+ materialization identity（`f_incarnation`）+ revision 0。
+ * 方言无关的纯映射——SQLite 与 PostgreSQL 后端的 `upsertSession` 共用，列名
+ * 与 `src/entities/sessions.ts` 对齐（改一处即两方言生效）。`f_id` serial 由
+ * 数据库生成，不在映射内。
+ */
+export function sessionInsertRow(
+  meta: SessionHeader,
+  incarnation: string,
+): {
+  fSessionId: string;
+  fHeadEventId: string;
+  fHeadSequence: number;
+  fVersion: number;
+  fCreatedAt: number;
+  fCwd: string | null;
+  fParentSession: string | null;
+  fSeedLength: number | null;
+  fOrigin: string | null;
+  fDelegationDepth: number | null;
+  fIncarnation: string;
+  fRevision: number;
+} {
+  return {
+    fSessionId: meta.id,
+    fHeadEventId: "",
+    fHeadSequence: -1,
+    fVersion: meta.version,
+    fCreatedAt: meta.createdAt,
+    fCwd: meta.cwd ?? null,
+    fParentSession: meta.parentSession ?? null,
+    fSeedLength: meta.seedLength ?? null,
+    fOrigin: meta.origin ?? null,
+    fDelegationDepth: meta.delegationDepth ?? null,
+    fIncarnation: incarnation,
+    fRevision: 0,
+  };
+}
+
+/**
+ * `t_sessions` 的 ON CONFLICT 更新列值：只刷新 header 列，保留 head 游标
+ * （`f_head_event_id`/`f_head_sequence`）与 materialization identity
+ * （`f_incarnation`/`f_revision`）。方言无关，两后端共用（见
+ * {@link sessionInsertRow}）。
+ */
+export function sessionConflictRow(
+  meta: SessionHeader,
+): {
+  fVersion: number;
+  fCreatedAt: number;
+  fCwd: string | null;
+  fParentSession: string | null;
+  fSeedLength: number | null;
+  fOrigin: string | null;
+  fDelegationDepth: number | null;
+} {
+  return {
+    fVersion: meta.version,
+    fCreatedAt: meta.createdAt,
+    fCwd: meta.cwd ?? null,
+    fParentSession: meta.parentSession ?? null,
+    fSeedLength: meta.seedLength ?? null,
+    fOrigin: meta.origin ?? null,
+    fDelegationDepth: meta.delegationDepth ?? null,
+  };
+}
+
+/**
  * Remap a stored {@link SurfaceOp} from upstream seqs to persisted seqs. An
  * `append` op carries no seqs; a positional `replace`'s `start`/`end` name
  * surface nodes by UPSTREAM seq and must follow {@link SessionEvent.sourceEventSeqs}
