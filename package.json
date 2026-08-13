@@ -3,6 +3,12 @@
   "version": "0.0.1",
   "private": true,
   "description": "RDB durable session persistence backend for the DeepSeek Harness",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-session-persistence",
+    "rdb"
+  ],
   "license": "BSD-3-Clause",
   "files": [
     "src",
