@@ -1,6 +1,6 @@
 {
   "name": "@morlay/session-persistence-rdb",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "RDB durable session persistence backend for the DeepSeek Harness",
   "keywords": [
     "dsh",
@@ -9,6 +9,10 @@
     "rdb"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/morlay/session-persistence-rdb.git"
+  },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com/"
   },
