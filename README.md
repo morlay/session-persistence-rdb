@@ -8,10 +8,12 @@ RDB（SQLite / PostgreSQL）持久会话后端（`ctx.sessionPersistence`）：�
 ## 安装
 
 包发布在 GitHub Packages，按包名安装到 dsh profile（示例：web；`dsh plugin
-add` 把参数原样转发给 pnpm，版本号按发布版本调整）：
+add` 把参数原样转发给 pnpm，版本号按发布版本调整）。registry 必须限定在
+`@morlay` scope（`--config.@morlay:registry=…`），不要用全局 `--registry`，
+否则依赖（`@deepseek-ai/*` 等）也会被指到 GitHub Packages 而解析失败：
 
 ```sh
-dsh plugin --profile=web add "@morlay/session-persistence-rdb@^0.0.1" --registry=https://npm.pkg.github.com/
+dsh plugin --profile=web add "@morlay/session-persistence-rdb@^0.0.1" --config.@morlay:registry=https://npm.pkg.github.com/
 ```
 
 GitHub Packages 的 registry 要求认证（公开包也一样）：profile 的 `.npmrc`
