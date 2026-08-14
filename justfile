@@ -1,19 +1,12 @@
 default:
-    just --list --list-submodules
+    just --list
 
-dep:
-    nub install
+dep *args:
+    nub install {{ args }}
 
-test:
-    nub exec vitest run
-
-# PostgreSQL backend contract tests against the compose dev instance.
-pg-up:
-    docker compose up -d --wait db
-pg-down:
-    docker compose down
-pg-test: pg-up
-    TEST_PG_URL="postgres://postgres:postgres@localhost:25433/postgres" nub exec vitest run tests/pg.spec.ts
+clean:
+    rm -f nub.lock;
+    rm -rf node_modules;
 
 fmt:
     nub exec oxfmt .
@@ -21,9 +14,10 @@ fmt:
 lint:
     nub exec oxlint
 
-clean:
-    rm -f nub.lock;
-    rm -rf node_modules;
+build:
+    nub exec tsdown
 
-coding:
-    zephyr dev
+test:
+    nub exec vitest run
+
+mod pg 'tool/pg/justfile'

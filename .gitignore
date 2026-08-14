@@ -1,7 +1,7 @@
 lib/
 node_modules/
-*.tgz
 .tmp/
+*.tgz
 
 # lock 文件不入库
 nub.lock

@@ -10,8 +10,8 @@ import { Context } from "@deepseek-ai/cordis";
 import { SessionStore, SessionId } from "@deepseek-ai/dsh-session";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
-import { EmptySettings } from "./helpers.ts";
-import SessionPersistenceRdb from "../src/index.ts";
+import { EmptySettings } from "./testing/helpers.ts";
+import SessionPersistenceRdb from "../index.ts";
 
 const dirs: string[] = [];
 afterEach(async () => {

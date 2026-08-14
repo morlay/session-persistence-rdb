@@ -1,0 +1,64 @@
+name: release
+
+# 每次 push 到 main：lint + 全量测试（含 PostgreSQL 契约测试）通过后自动发布
+# 到 GitHub Packages（npm.pkg.github.com）。版本号需在 push 前手动 bump
+# （`nub version`），重复版本发布会失败（保护性失败）。
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Lint
+        run: just lint
+      - name: Test
+        run: just test
+        env:
+          TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - name: Build
+        run: just build
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      # prepare 生命周期会在 publish 前自动构建；此处显式构建一次兜底
+      # （tsdown 幂等且 ~1.5s）。
+      - name: Build
+        run: just build
+      - name: Publish to GitHub Packages
+        run: |
+          # registry 由 package.json 的 publishConfig 声明；这里只提供认证。
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
+          nub publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

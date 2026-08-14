@@ -7,11 +7,17 @@ RDB（SQLite / PostgreSQL）持久会话后端（`ctx.sessionPersistence`）：�
 
 ## 安装
 
-从 git 安装到 dsh profile（示例：web）：
+包发布在 GitHub Packages，按包名安装到 dsh profile（示例：web；`dsh plugin
+add` 把参数原样转发给 pnpm，版本号按发布版本调整）：
 
 ```sh
-dsh plugin --profile=web add "@morlay/session-persistence-rdb@https://github.com/dsh-external/session-persistence-rdb.git"
+dsh plugin --profile=web add "@morlay/session-persistence-rdb@^0.0.1" --registry=https://npm.pkg.github.com/
 ```
+
+GitHub Packages 的 registry 要求认证（公开包也一样）：profile 的 `.npmrc`
+需为 `npm.pkg.github.com` 配置访问 token（如
+`//npm.pkg.github.com/:_authToken=<token>`），详见
+[GitHub 文档](https://docs.github.com/packages/working-with-a-github-packages-registry/working-with-the-npm-registry)。
 
 ## 配置
 
@@ -21,7 +27,7 @@ dsh plugin --profile=web add "@morlay/session-persistence-rdb@https://github.com
 ```yaml
 session-persistence-rdb:
   type: sqlite
-  # path 省略时回落 cordis.patch.yml 的默认（$DSH_HOME/sessions/session.db，
+  # path 省略时回落 cordis.patch.yml 的默认（$DSH_HOME/sessions/sessions.sqlite，
   # 由 bundle patch 的 !!js 表达式求值）；自定义路径请用绝对路径字符串。
   path: /absolute/path/to/sessions.sqlite
   journalMode: wal
@@ -61,13 +67,3 @@ type Config =
     };
 ```
 
-## 开发
-
-```sh
-# 安装依赖（@deepseek-ai/* 从 npm registry 安装）
-just dep
-# lint（oxlint + tsgolint 类型规则，即类型检查）
-just lint
-# 测试（vitest，含上游契约测试）
-just test
-```

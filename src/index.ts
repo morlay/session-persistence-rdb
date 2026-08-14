@@ -462,12 +462,10 @@ export class SessionPersistenceRdb
         // hand-written torn tail never updated it), so a closer must follow the
         // last physical row, not the cursor.
         const last = await tx.getLastBridge(meta.id);
-        const { headEventId, headSequence } = await appendEventTail(
-          tx,
-          meta,
-          persistedClosers,
-          { parentId: last?.fEventId ?? "", nextSeq: (last?.fSequence ?? -1) + 1 },
-        );
+        const { headEventId, headSequence } = await appendEventTail(tx, meta, persistedClosers, {
+          parentId: last?.fEventId ?? "",
+          nextSeq: (last?.fSequence ?? -1) + 1,
+        });
         await tx.updateHead(meta.id, headEventId, headSequence);
       }
       await tx.bumpRevision(meta.id);
@@ -525,6 +523,11 @@ function createBackend(config: Config): Backend {
     });
   }
   const pool = new Pool({ connectionString: config.connectionString });
+  // node-postgres 官方要求 Pool 必须监听 error：idle client 被服务器端
+  // 切断（数据库重启、DROP DATABASE ... FORCE）时，未监听的 error 会以
+  // uncaughtException 崩溃进程。池级错误会在下一次操作（query）处可见，
+  // 这里只需消费事件，无需输出。
+  pool.on("error", () => {});
   const db = drizzlePg({ client: pool });
   const identityBase = [
     "postgres",

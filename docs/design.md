@@ -7,9 +7,17 @@
 
 ```
 session-persistence-rdb/
+├── .github/                     # Actions：setup 复用 + release（lint/test/build → npm publish）
+├── LICENSE                      # MIT
 ├── cordis.patch.yml             # bundle 声明：dsh plugin 装配本插件
+├── justfile                     # 常用命令（dep / lint / build / test / pg …）
+├── package.json                 # 包元数据；exports 指向 lib/ 产物
 ├── src/                         # 只 import 官方包（@deepseek-ai/cordis 等 @deepseek-ai/*）
-└── tests/                       # 含上游官方契约测试
+│   ├── __tests__/               # vitest 测试（testing/ 为共享契约与辅助）
+│   └── …                        # entities / adapters / 后端实现
+├── tsdown.config.ts             # 构建配置（entry、dts、外部化依赖）
+├── tool/pg/                     # PostgreSQL 测试实例（compose + justfile）
+└── README.md
 ```
 
 依赖解析：`@deepseek-ai/*`（含 `@deepseek-ai/cordis`、`@deepseek-ai/schemastery` 与

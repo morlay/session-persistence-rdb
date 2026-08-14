@@ -1,0 +1,11 @@
+name: setup
+description: "Install toolchain (mise.toml) and dependencies (package.json)"
+
+runs:
+  using: composite
+  steps:
+    - name: Install tools
+      uses: jdx/mise-action@v2
+    - name: Install dependencies
+      run: nub install
+      shell: bash

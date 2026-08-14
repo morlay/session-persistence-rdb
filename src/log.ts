@@ -83,9 +83,7 @@ export function sessionInsertRow(
  * （`f_incarnation`/`f_revision`）。方言无关，两后端共用（见
  * {@link sessionInsertRow}）。
  */
-export function sessionConflictRow(
-  meta: SessionHeader,
-): {
+export function sessionConflictRow(meta: SessionHeader): {
   fVersion: number;
   fCreatedAt: number;
   fCwd: string | null;

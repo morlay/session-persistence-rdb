@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { CallId, createMessage, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { afterEach, describe, expect, it } from "vitest";
-import { EmptySettings } from "./helpers.ts";
+import { EmptySettings } from "./testing/helpers.ts";
 import { Context } from "@deepseek-ai/cordis";
 import { existsSync } from "node:fs";
 import { chmod, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
@@ -15,7 +15,7 @@ import type {
   SurfaceEvent,
   SurfaceEventType,
 } from "@deepseek-ai/dsh-session";
-import SessionPersistenceSqlite, { SCHEMA_VERSION, EPHEMERAL_EVENT_TYPES } from "../src/index.ts";
+import SessionPersistenceSqlite, { SCHEMA_VERSION, EPHEMERAL_EVENT_TYPES } from "../index.ts";
 import {
   buildSeqMap,
   remapShadowedRange,
@@ -23,7 +23,7 @@ import {
   rowToEvent,
   rowToMeta,
   scanRows,
-} from "../src/log.ts";
+} from "../log.ts";
 import {
   DEFAULT_BUSY_TIMEOUT_MS,
   eventDimensions,
@@ -32,10 +32,10 @@ import {
   SESSION_PERSISTENCE_SQLITE_APPLICATION_ID,
   type EventRow,
   type SessionRow,
-} from "../src/schema.ts";
-import { openDatabase } from "../src/sqlite.ts";
-import { runPersistenceContract, meta, oneTurnLog, appendLog } from "./contract.ts";
-import { runCoordinatorContract, type CoordinatorFixture } from "./coordinator-contract.ts";
+} from "../schema.ts";
+import { openDatabase } from "../sqlite.ts";
+import { runPersistenceContract, meta, oneTurnLog, appendLog } from "./testing/contract.ts";
+import { runCoordinatorContract, type CoordinatorFixture } from "./testing/coordinator-contract.ts";
 
 const dirs: string[] = [];
 afterEach(async () => {
