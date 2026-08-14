@@ -57,8 +57,10 @@ jobs:
         run: just build
       - name: Publish to GitHub Packages
         run: |
-          # registry 由 package.json 的 publishConfig 声明；这里只提供认证。
-          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
+          # registry 由 package.json 的 publishConfig 声明；认证 token 写到
+          # 全局 ~/.npmrc（nub publish 拒绝脏 working tree，不能覆盖仓库
+          # 根的 .npmrc）。
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
           nub publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
