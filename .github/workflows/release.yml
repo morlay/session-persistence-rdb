@@ -2,7 +2,7 @@ name: release
 
 # 每次 push 到 main：lint + 全量测试（含 PostgreSQL 契约测试）通过后自动发布
 # 到 GitHub Packages（npm.pkg.github.com）。版本号需在 push 前手动 bump
-# （`nub version`），重复版本发布会失败（保护性失败）。
+# （`nub version`）；版本已存在时跳过发布（CI 不失败）。
 on:
   push:
     branches:
@@ -61,6 +61,22 @@ jobs:
           # 全局 ~/.npmrc（nub publish 拒绝脏 working tree，不能覆盖仓库
           # 根的 .npmrc）。
           echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
+          PKG="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          # 版本已存在（重复 push / 未 bump）时跳过发布，CI 保持绿色；
+          # 404（E404）才是「未发布过」，其余 view 错误如实失败。
+          if npm view "$PKG@$VERSION" version --registry=https://npm.pkg.github.com/ \
+            >/dev/null 2>"$HOME/.view-err"; then
+            echo "version $VERSION already published; skip publish"
+            exit 0
+          fi
+          if ! grep -q "E404" "$HOME/.view-err"; then
+            cat "$HOME/.view-err"
+            rm -f "$HOME/.view-err"
+            exit 1
+          fi
+          rm -f "$HOME/.view-err"
+          echo "version $VERSION not published yet; publishing"
           nub publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
